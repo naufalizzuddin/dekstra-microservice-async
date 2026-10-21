@@ -1,0 +1,58 @@
+# Python byte-compiled files
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# SQLite database (ignore all sqlite files)
+*.sqlite3
+*.sqlite-journal
+
+# Environment variables and local config
+.env
+.env.local
+.env.*
+!.env.*.example
+
+# Virtual environments
+.venv/
+venv/
+.env/
+env/
+venv/*
+
+# Django media uploads and static files
+media/
+static/
+staticfiles/
+
+# Logs and backups
+*.log
+*.bak
+
+# Coverage and test artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+loadtest/generated/
+loadtest/results/*
+!loadtest/results/.gitkeep
+
+# IDE/editor folders
+.vscode/
+.idea/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Packaging
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Other
+*.tar.gz
+*.zip

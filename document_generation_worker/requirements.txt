@@ -1,0 +1,9 @@
+Django==6.0.6
+celery
+redis
+psycopg[binary]
+docxtpl
+python-docx
+openpyxl
+qrcode[pil]
+Pillow

@@ -1,0 +1,43 @@
+name: dekstra-load-generator
+
+services:
+  locust:
+    build:
+      context: ./loadtest
+    restart: "no"
+    environment:
+      SBLT_USERS: ${SBLT_USERS:-100}
+      SBLT_TIMEOUT: "30"
+      SBLT_OTP: "246810"
+      SBLT_PASSWORD: ${SBLT_PASSWORD:-LoadTest!2026}
+      SBLT_WAIT_MIN: "1"
+      SBLT_WAIT_MAX: "3"
+      SBLT_HOST_HEADER: ${SBLT_HOST_HEADER:-}
+      SBLT_SCENARIO_KIND: ${SBLT_SCENARIO_KIND:-manual}
+      SBLT_ENDPOINT_ALLOCATIONS: ${SBLT_ENDPOINT_ALLOCATIONS:-}
+      SBLT_ENABLE_SHAPE: ${SBLT_ENABLE_SHAPE:-0}
+      SBLT_SPIKE_PHASES: ${SBLT_SPIKE_PHASES:-[]}
+      SBLT_PHASE_ENDPOINT_ALLOCATIONS: ${SBLT_PHASE_ENDPOINT_ALLOCATIONS:-[]}
+      SBLT_TOKEN_FILE: /loadtest/generated/accounts.json
+    volumes:
+      - ./loadtest/results:/results
+      - ./loadtest/generated:/loadtest/generated:ro
+    command:
+      - -f
+      - /loadtest/locustfile.py
+      - --headless
+      - --host
+      - ${SBLT_TARGET:?SBLT_TARGET wajib diisi}
+      - --users
+      - ${SBLT_USERS:-50}
+      - --spawn-rate
+      - ${SBLT_SPAWN_RATE:-10}
+      - --run-time
+      - ${SBLT_DURATION:-300s}
+      - --stop-timeout
+      - "30"
+      - --csv
+      - /results/${SBLT_RUN_ID:-manual}/locust
+      - --csv-full-history
+      - --html
+      - /results/${SBLT_RUN_ID:-manual}/report.html

@@ -1,0 +1,31 @@
+services:
+  user-api:
+    environment:
+      LOAD_TESTING: "1"
+      LOAD_TEST_OTP: "246810"
+      LOAD_TEST_OTP_TTL_HOURS: "12"
+      OTP_EMAIL_ENABLED: "1"
+      OTP_EXPOSE_IN_RESPONSE: "1"
+      EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+      AUTH_ANON_THROTTLE_RATE: "100000/min"
+      AUTH_USER_THROTTLE_RATE: "100000/min"
+
+  otp-email-worker:
+    environment:
+      LOAD_TESTING: "1"
+      LOAD_TEST_OTP: "246810"
+      LOAD_TEST_OTP_TTL_HOURS: "12"
+      OTP_EMAIL_ENABLED: "1"
+      OTP_EXPOSE_IN_RESPONSE: "1"
+      EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+      AUTH_ANON_THROTTLE_RATE: "100000/min"
+      AUTH_USER_THROTTLE_RATE: "100000/min"
+
+  approval-api:
+    environment:
+      LOAD_TESTING: "1"
+
+  reporting-api:
+    environment:
+      LOAD_TESTING: "1"
+      REPORTING_DASHBOARD_FETCH_DOCUMENT_STATS: "0"

@@ -1,0 +1,12 @@
+Django==6.0.6
+gunicorn
+djangorestframework
+djangorestframework-simplejwt
+celery
+redis
+psycopg[binary]
+docxtpl
+python-docx
+openpyxl
+qrcode[pil]
+Pillow

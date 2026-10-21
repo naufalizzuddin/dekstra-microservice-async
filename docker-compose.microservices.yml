@@ -1,0 +1,194 @@
+services:
+  gateway:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - user-api
+      - reporting-api
+      - document-api
+      - approval-api
+
+  user-api:
+    build:
+      context: .
+      dockerfile: user_service/Dockerfile
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8001
+    volumes:
+      - ./user_service/media:/app/media
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dekstra-dev-secret-key-for-local-microservices-only}
+      - DEBUG=1
+      - OTP_EXPOSE_IN_RESPONSE=${OTP_EXPOSE_IN_RESPONSE:-1}
+      - DATABASE_URL=postgres://dekstra:dekstra@user-db:5432/user_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - EMAIL_HOST_USER=${EMAIL_HOST_USER:-}
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-dev-internal-token}
+    depends_on:
+      - user-db
+      - redis
+
+  otp-email-worker:
+    build:
+      context: .
+      dockerfile: user_service/Dockerfile
+    command: celery -A config worker -Q otp -l info
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dekstra-dev-secret-key-for-local-microservices-only}
+      - DEBUG=1
+      - DATABASE_URL=postgres://dekstra:dekstra@user-db:5432/user_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - EMAIL_HOST_USER=${EMAIL_HOST_USER:-}
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-dev-internal-token}
+    depends_on:
+      - user-db
+      - redis
+
+  document-api:
+    build:
+      context: .
+      dockerfile: document_service/Dockerfile
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8004
+    volumes:
+      - ./document_service/media:/app/media
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dekstra-dev-secret-key-for-local-microservices-only}
+      - DEBUG=1
+      - DATABASE_URL=postgres://dekstra:dekstra@document-db:5432/document_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REPORTING_SERVICE_URL=http://reporting-api:8003
+      - KEPALA_DESA_NAMA=${KEPALA_DESA_NAMA:-Kepala Desa}
+      - KEPALA_DESA_NIP=${KEPALA_DESA_NIP:--}
+    depends_on:
+      - document-db
+      - redis
+
+  approval-api:
+    build:
+      context: .
+      dockerfile: approval_service/Dockerfile
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8005
+    volumes:
+      - ./document_service/media:/app/media
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dekstra-dev-secret-key-for-local-microservices-only}
+      - DEBUG=1
+      - DATABASE_URL=postgres://dekstra:dekstra@document-db:5432/document_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REPORTING_SERVICE_URL=http://reporting-api:8003
+      - KEPALA_DESA_NAMA=${KEPALA_DESA_NAMA:-Kepala Desa}
+      - KEPALA_DESA_NIP=${KEPALA_DESA_NIP:--}
+    depends_on:
+      - document-db
+      - redis
+
+  reporting-api:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8003
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dekstra-dev-secret-key-for-local-microservices-only}
+      - DEBUG=1
+      - DATABASE_URL=postgres://dekstra:dekstra@reporting-db:5432/reporting_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DOCUMENT_SERVICE_URL=http://document-api:8004
+    depends_on:
+      - reporting-db
+      - redis
+
+  document-generation-worker:
+    build:
+      context: .
+      dockerfile: document_generation_worker/Dockerfile
+    command: celery -A config worker -Q document -l info
+    volumes:
+      - ./document_service/media:/app/media
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dekstra-dev-secret-key-for-local-microservices-only}
+      - DEBUG=1
+      - DATABASE_URL=postgres://dekstra:dekstra@document-db:5432/document_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REPORTING_SERVICE_URL=http://reporting-api:8003
+      - KEPALA_DESA_NAMA=${KEPALA_DESA_NAMA:-Kepala Desa}
+      - KEPALA_DESA_NIP=${KEPALA_DESA_NIP:--}
+    depends_on:
+      - document-db
+      - redis
+
+  reporting-projection-worker:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    command: celery -A config worker -Q projection -l info
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dekstra-dev-secret-key-for-local-microservices-only}
+      - DEBUG=1
+      - DATABASE_URL=postgres://dekstra:dekstra@reporting-db:5432/reporting_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DOCUMENT_SERVICE_URL=http://document-api:8004
+    depends_on:
+      - reporting-db
+      - redis
+
+  notification-worker:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    command: celery -A config worker -Q notification -l info
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dekstra-dev-secret-key-for-local-microservices-only}
+      - DEBUG=1
+      - DATABASE_URL=postgres://dekstra:dekstra@reporting-db:5432/reporting_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DOCUMENT_SERVICE_URL=http://document-api:8004
+    depends_on:
+      - reporting-db
+      - redis
+
+  redis:
+    image: redis:7-alpine
+
+  user-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=user_db
+      - POSTGRES_USER=dekstra
+      - POSTGRES_PASSWORD=dekstra
+    volumes:
+      - user_db_data:/var/lib/postgresql/data
+
+  document-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=document_db
+      - POSTGRES_USER=dekstra
+      - POSTGRES_PASSWORD=dekstra
+    volumes:
+      - document_db_data:/var/lib/postgresql/data
+
+  reporting-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=reporting_db
+      - POSTGRES_USER=dekstra
+      - POSTGRES_PASSWORD=dekstra
+    volumes:
+      - reporting_db_data:/var/lib/postgresql/data
+
+volumes:
+  user_db_data:
+  document_db_data:
+  reporting_db_data:

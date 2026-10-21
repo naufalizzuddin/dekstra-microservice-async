@@ -1,0 +1,354 @@
+name: ${COMPOSE_PROJECT_NAME:-dekstra-microservice}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app-defaults: &app-defaults
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 30s
+  logging: *default-logging
+
+x-common-environment: &common-environment
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY wajib diisi}
+  DEBUG: "0"
+  OTP_EXPOSE_IN_RESPONSE: ${OTP_EXPOSE_IN_RESPONSE:-0}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS wajib diisi}
+  CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:?CSRF_TRUSTED_ORIGINS wajib diisi}
+  # HTTPS is enforced by the host Nginx. Internal service-to-service calls stay HTTP.
+  SECURE_SSL_REDIRECT: "0"
+  SESSION_COOKIE_SECURE: "1"
+  CSRF_COOKIE_SECURE: "1"
+  SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-3600}
+  SECURE_HSTS_INCLUDE_SUBDOMAINS: ${SECURE_HSTS_INCLUDE_SUBDOMAINS:-0}
+  SECURE_HSTS_PRELOAD: ${SECURE_HSTS_PRELOAD:-0}
+  DB_CONN_MAX_AGE: ${DB_CONN_MAX_AGE:-60}
+  CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD wajib diisi}@redis:6379/0
+  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD wajib diisi}@redis:6379/1
+
+services:
+  gateway:
+    image: nginx:1.30.2-alpine
+    <<: *app-defaults
+    ports:
+      - "${GATEWAY_BIND_ADDRESS:-127.0.0.1}:${GATEWAY_PORT:-8080}:80"
+    volumes:
+      - ./gateway/nginx.production.conf:/etc/nginx/nginx.conf:ro
+      - user_static_data:/srv/static:ro
+    depends_on:
+      user-api:
+        condition: service_healthy
+      reporting-api:
+        condition: service_healthy
+      document-api:
+        condition: service_healthy
+      approval-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/health/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  user-init:
+    build:
+      context: .
+      dockerfile: user_service/Dockerfile
+    restart: "no"
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput"
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${USER_DB_USER:-dekstra}:${USER_DB_PASSWORD:?USER_DB_PASSWORD wajib diisi}@user-db:5432/${USER_DB_NAME:-user_db}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN wajib diisi}
+    volumes:
+      - user_static_data:/app/staticfiles
+      - user_media_data:/app/media
+    depends_on:
+      user-db:
+        condition: service_healthy
+    logging: *default-logging
+
+  user-api:
+    build:
+      context: .
+      dockerfile: user_service/Dockerfile
+    <<: *app-defaults
+    command: sh -c "exec gunicorn config.wsgi:application --bind 0.0.0.0:8001 --workers ${USER_GUNICORN_WORKERS:-4} --timeout ${GUNICORN_TIMEOUT:-60} --access-logfile - --error-logfile - --capture-output"
+    volumes:
+      - user_media_data:/app/media
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${USER_DB_USER:-dekstra}:${USER_DB_PASSWORD:?USER_DB_PASSWORD wajib diisi}@user-db:5432/${USER_DB_NAME:-user_db}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-1}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:?EMAIL_HOST_USER wajib diisi}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:?EMAIL_HOST_PASSWORD wajib diisi}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN wajib diisi}
+      ACCESS_TOKEN_DAYS: ${ACCESS_TOKEN_DAYS:-3}
+      REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-7}
+    depends_on:
+      user-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  otp-email-worker:
+    build:
+      context: .
+      dockerfile: user_service/Dockerfile
+    <<: *app-defaults
+    command: celery -A config worker -Q otp -l info --concurrency=${OTP_WORKER_CONCURRENCY:-1}
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${USER_DB_USER:-dekstra}:${USER_DB_PASSWORD:?USER_DB_PASSWORD wajib diisi}@user-db:5432/${USER_DB_NAME:-user_db}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-1}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:?EMAIL_HOST_USER wajib diisi}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:?EMAIL_HOST_PASSWORD wajib diisi}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN wajib diisi}
+    depends_on:
+      user-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  document-init:
+    build:
+      context: .
+      dockerfile: document_service/Dockerfile
+    restart: "no"
+    command: python manage.py migrate --noinput
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${DOCUMENT_DB_USER:-dekstra}:${DOCUMENT_DB_PASSWORD:?DOCUMENT_DB_PASSWORD wajib diisi}@document-db:5432/${DOCUMENT_DB_NAME:-document_db}
+      REPORTING_SERVICE_URL: http://reporting-api:8003
+      KEPALA_DESA_NAMA: ${KEPALA_DESA_NAMA:?KEPALA_DESA_NAMA wajib diisi}
+      KEPALA_DESA_NIP: ${KEPALA_DESA_NIP:?KEPALA_DESA_NIP wajib diisi}
+    depends_on:
+      document-db:
+        condition: service_healthy
+    logging: *default-logging
+
+  document-api:
+    build:
+      context: .
+      dockerfile: document_service/Dockerfile
+    <<: *app-defaults
+    command: sh -c "exec gunicorn config.wsgi:application --bind 0.0.0.0:8004 --workers ${DOCUMENT_GUNICORN_WORKERS:-4} --timeout ${GUNICORN_TIMEOUT:-60} --access-logfile - --error-logfile - --capture-output"
+    volumes:
+      - document_media_data:/app/media
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${DOCUMENT_DB_USER:-dekstra}:${DOCUMENT_DB_PASSWORD:?DOCUMENT_DB_PASSWORD wajib diisi}@document-db:5432/${DOCUMENT_DB_NAME:-document_db}
+      REPORTING_SERVICE_URL: http://reporting-api:8003
+      KEPALA_DESA_NAMA: ${KEPALA_DESA_NAMA:?KEPALA_DESA_NAMA wajib diisi}
+      KEPALA_DESA_NIP: ${KEPALA_DESA_NIP:?KEPALA_DESA_NIP wajib diisi}
+    depends_on:
+      document-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8004), 2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  approval-api:
+    build:
+      context: .
+      dockerfile: approval_service/Dockerfile
+    <<: *app-defaults
+    command: sh -c "exec gunicorn config.wsgi:application --bind 0.0.0.0:8005 --workers ${APPROVAL_GUNICORN_WORKERS:-2} --timeout ${GUNICORN_TIMEOUT:-60} --access-logfile - --error-logfile - --capture-output"
+    volumes:
+      - document_media_data:/app/media
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${DOCUMENT_DB_USER:-dekstra}:${DOCUMENT_DB_PASSWORD:?DOCUMENT_DB_PASSWORD wajib diisi}@document-db:5432/${DOCUMENT_DB_NAME:-document_db}
+      REPORTING_SERVICE_URL: http://reporting-api:8003
+      KEPALA_DESA_NAMA: ${KEPALA_DESA_NAMA:?KEPALA_DESA_NAMA wajib diisi}
+      KEPALA_DESA_NIP: ${KEPALA_DESA_NIP:?KEPALA_DESA_NIP wajib diisi}
+    depends_on:
+      document-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8005), 2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  document-generation-worker:
+    build:
+      context: .
+      dockerfile: document_generation_worker/Dockerfile
+    <<: *app-defaults
+    command: celery -A config worker -Q document -l info --concurrency=${DOCUMENT_WORKER_CONCURRENCY:-1}
+    volumes:
+      - document_media_data:/app/media
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${DOCUMENT_DB_USER:-dekstra}:${DOCUMENT_DB_PASSWORD:?DOCUMENT_DB_PASSWORD wajib diisi}@document-db:5432/${DOCUMENT_DB_NAME:-document_db}
+      REPORTING_SERVICE_URL: http://reporting-api:8003
+      KEPALA_DESA_NAMA: ${KEPALA_DESA_NAMA:?KEPALA_DESA_NAMA wajib diisi}
+      KEPALA_DESA_NIP: ${KEPALA_DESA_NIP:?KEPALA_DESA_NIP wajib diisi}
+      LIBREOFFICE_TIMEOUT_SECONDS: ${LIBREOFFICE_TIMEOUT_SECONDS:-120}
+    depends_on:
+      document-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  reporting-init:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    restart: "no"
+    command: python manage.py migrate --noinput
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${REPORTING_DB_USER:-dekstra}:${REPORTING_DB_PASSWORD:?REPORTING_DB_PASSWORD wajib diisi}@reporting-db:5432/${REPORTING_DB_NAME:-reporting_db}
+      DOCUMENT_SERVICE_URL: http://document-api:8004
+    depends_on:
+      reporting-db:
+        condition: service_healthy
+    logging: *default-logging
+
+  reporting-api:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    <<: *app-defaults
+    command: sh -c "exec gunicorn config.wsgi:application --bind 0.0.0.0:8003 --workers ${REPORTING_GUNICORN_WORKERS:-3} --timeout ${GUNICORN_TIMEOUT:-60} --access-logfile - --error-logfile - --capture-output"
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${REPORTING_DB_USER:-dekstra}:${REPORTING_DB_PASSWORD:?REPORTING_DB_PASSWORD wajib diisi}@reporting-db:5432/${REPORTING_DB_NAME:-reporting_db}
+      DOCUMENT_SERVICE_URL: http://document-api:8004
+    depends_on:
+      reporting-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8003), 2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  reporting-projection-worker:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    <<: *app-defaults
+    command: celery -A config worker -Q projection -l info --concurrency=${PROJECTION_WORKER_CONCURRENCY:-1}
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${REPORTING_DB_USER:-dekstra}:${REPORTING_DB_PASSWORD:?REPORTING_DB_PASSWORD wajib diisi}@reporting-db:5432/${REPORTING_DB_NAME:-reporting_db}
+      DOCUMENT_SERVICE_URL: http://document-api:8004
+    depends_on:
+      reporting-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  notification-worker:
+    build:
+      context: .
+      dockerfile: reporting_service/Dockerfile
+    <<: *app-defaults
+    command: celery -A config worker -Q notification -l info --concurrency=${NOTIFICATION_WORKER_CONCURRENCY:-1}
+    environment:
+      <<: *common-environment
+      DATABASE_URL: postgresql://${REPORTING_DB_USER:-dekstra}:${REPORTING_DB_PASSWORD:?REPORTING_DB_PASSWORD wajib diisi}@reporting-db:5432/${REPORTING_DB_NAME:-reporting_db}
+      DOCUMENT_SERVICE_URL: http://document-api:8004
+    depends_on:
+      reporting-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    <<: *app-defaults
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD wajib diisi}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD wajib diisi}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  user-db:
+    image: postgres:16-alpine
+    <<: *app-defaults
+    environment:
+      POSTGRES_DB: ${USER_DB_NAME:-user_db}
+      POSTGRES_USER: ${USER_DB_USER:-dekstra}
+      POSTGRES_PASSWORD: ${USER_DB_PASSWORD:?USER_DB_PASSWORD wajib diisi}
+    volumes:
+      - user_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  document-db:
+    image: postgres:16-alpine
+    <<: *app-defaults
+    environment:
+      POSTGRES_DB: ${DOCUMENT_DB_NAME:-document_db}
+      POSTGRES_USER: ${DOCUMENT_DB_USER:-dekstra}
+      POSTGRES_PASSWORD: ${DOCUMENT_DB_PASSWORD:?DOCUMENT_DB_PASSWORD wajib diisi}
+    volumes:
+      - document_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  reporting-db:
+    image: postgres:16-alpine
+    <<: *app-defaults
+    environment:
+      POSTGRES_DB: ${REPORTING_DB_NAME:-reporting_db}
+      POSTGRES_USER: ${REPORTING_DB_USER:-dekstra}
+      POSTGRES_PASSWORD: ${REPORTING_DB_PASSWORD:?REPORTING_DB_PASSWORD wajib diisi}
+    volumes:
+      - reporting_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  user_db_data:
+  document_db_data:
+  reporting_db_data:
+  redis_data:
+  user_static_data:
+  user_media_data:
+  document_media_data:
